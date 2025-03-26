@@ -268,15 +268,91 @@ async def list_available_transcripts(ctx: Context) -> str:
 
 # Resources
 @mcp.resource("transcript://{video_id}")
-async def get_transcript_resource(video_id: str, *, ctx: Context = None) -> str:
+async def get_transcript_resource(video_id: str) -> str:
     """Get transcript by video ID, downloading if necessary"""
-    return await get_transcript(video_id, ctx)
+    # We'll modify get_transcript to not require ctx parameter
+    try:
+        # Get the cache from lifespan context
+        ctx = Context()
+        cache = ctx.request_context.lifespan_context
+        
+        # Check cache first
+        cached_info = cache.get(video_id)
+        if cached_info and cached_info.text:
+            return cached_info.text
+        
+        # Download the transcript if not cached
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        # Format the transcript with timestamps
+        formatted_transcript = ""
+        for entry in transcript_list:
+            minutes = int(entry['start'] // 60)
+            seconds = int(entry['start'] % 60)
+            timestamp = f"[{minutes:02d}:{seconds:02d}]"
+            formatted_transcript += f"{timestamp} {entry['text']}\n"
+        
+        # Get video info (without ctx)
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        with httpx.Client() as client:
+            response = client.get(url)
+            video_info = None
+            if response.status_code == 200:
+                data = response.json()
+                video_info = VideoInfo(
+                    video_id=video_id,
+                    title=data.get("title", "Unknown Title"),
+                    channel=data.get("author_name", "Unknown Channel")
+                )
+            else:
+                video_info = VideoInfo(video_id=video_id, title="Unknown", channel="Unknown")
+        
+        # Create header with video information
+        header = f"Title: {video_info.title}\n"
+        header += f"Channel: {video_info.channel}\n"
+        header += f"Video ID: {video_id}\n\n"
+        header += "TRANSCRIPT:\n"
+        
+        full_transcript = header + formatted_transcript
+        
+        # Save to cache
+        info = TranscriptInfo(
+            video_id=video_id,
+            video_info=video_info,
+            text=full_transcript
+        )
+        cache.add(info)
+        
+        return full_transcript
+        
+    except Exception as e:
+        return f"Error retrieving transcript: {str(e)}"
 
 
 @mcp.resource("transcripts://list")
-async def list_transcripts_resource(*, ctx: Context = None) -> str:
+async def list_transcripts_resource() -> str:
     """List all available transcripts"""
-    return await list_available_transcripts(ctx)
+    try:
+        # Get the cache from lifespan context
+        ctx = Context()
+        cache = ctx.request_context.lifespan_context
+        transcripts = cache.list_all()
+        
+        if not transcripts:
+            return "No transcripts have been downloaded yet."
+        
+        result = "Available Transcripts:\n\n"
+        for i, info in enumerate(transcripts, 1):
+            title = info.video_info.title if info.video_info else "Unknown Title"
+            channel = info.video_info.channel if info.video_info else "Unknown Channel"
+            
+            result += f"{i}. {title}\n"
+            result += f"   Channel: {channel}\n"
+            result += f"   ID: {info.video_id}\n"
+        
+        return result
+    except Exception as e:
+        return f"Error listing transcripts: {str(e)}"
 
 
 # Prompts
