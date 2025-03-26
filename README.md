@@ -31,3 +31,14 @@ The generated code had errors, so I provided feedback to the prompt:
 > ValueError: Mismatch between URI parameters {'video_id'} and function parameters {'video_id', 'ctx'}
 > ```
 
+## Listing transcripts returns an error
+Using the MCP developer environment I found that the resrouce "transcripts://list" was not working.  I asked Claude to fix it.
+
+
+> When I invoke the resource, "transcripts://list" I get the following error from the MCP inspector
+>  
+> ```
+> Error
+> MCP error 0: Error reading resource transcripts://list: 'FastMCP' object has no attribute 'current_context
+> ```
+

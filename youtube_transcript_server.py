@@ -274,10 +274,8 @@ async def get_transcript_resource(video_id: str, *, ctx: Context = None) -> str:
 
 
 @mcp.resource("transcripts://list")
-async def list_transcripts_resource() -> str:
+async def list_transcripts_resource(*, ctx: Context = None) -> str:
     """List all available transcripts"""
-    # Access context via current request
-    ctx = mcp.current_context()
     return await list_available_transcripts(ctx)
 
 
