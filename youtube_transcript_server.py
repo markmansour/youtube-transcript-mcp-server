@@ -5,7 +5,7 @@ Provides tools to download transcripts and resources to access them.
 Includes prompts for summary and information analysis.
 """
 
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP
 from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 import httpx
@@ -14,8 +14,6 @@ import os
 from typing import Optional
 import json
 from dataclasses import dataclass
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
 
 # Create MCP server with dependencies
 mcp = FastMCP(
@@ -44,91 +42,72 @@ class TranscriptInfo:
     text: Optional[str] = None
     
 
-# State management for the server
-class TranscriptCache:
-    """Cache for transcripts"""
-    def __init__(self):
-        self.transcripts = {}  # video_id -> TranscriptInfo
+# State management - global module-level variables
+_TRANSCRIPTS = {}  # video_id -> TranscriptInfo
 
-    def get(self, video_id: str) -> Optional[TranscriptInfo]:
-        """Get transcript from cache"""
-        return self.transcripts.get(video_id)
+def get_transcript_from_cache(video_id: str) -> Optional[TranscriptInfo]:
+    """Get transcript from cache"""
+    return _TRANSCRIPTS.get(video_id)
 
-    def add(self, info: TranscriptInfo):
-        """Add transcript to cache"""
-        self.transcripts[info.video_id] = info
-        # Also save to disk for persistence
-        self._save_to_disk(info)
+def add_transcript_to_cache(info: TranscriptInfo):
+    """Add transcript to cache"""
+    _TRANSCRIPTS[info.video_id] = info
+    # Also save to disk for persistence
+    _save_transcript_to_disk(info)
     
-    def list_all(self):
-        """List all cached transcripts"""
-        return list(self.transcripts.values())
+def list_all_transcripts():
+    """List all cached transcripts"""
+    return list(_TRANSCRIPTS.values())
     
-    def _save_to_disk(self, info: TranscriptInfo):
-        """Save transcript to disk"""
-        if info.text:
-            file_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{info.video_id}.txt")
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(info.text)
+def _save_transcript_to_disk(info: TranscriptInfo):
+    """Save transcript to disk"""
+    if info.text:
+        file_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{info.video_id}.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(info.text)
+        
+        # Save metadata if available
+        if info.video_info:
+            meta_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{info.video_id}_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "title": info.video_info.title,
+                    "channel": info.video_info.channel
+                }, f)
+
+def load_transcripts_from_disk():
+    """Load all saved transcripts from disk"""
+    if not os.path.exists(TRANSCRIPT_CACHE_DIR):
+        return
+        
+    for filename in os.listdir(TRANSCRIPT_CACHE_DIR):
+        if filename.endswith(".txt") and not filename.endswith("_meta.txt"):
+            video_id = filename.replace(".txt", "")
+            file_path = os.path.join(TRANSCRIPT_CACHE_DIR, filename)
             
-            # Save metadata if available
-            if info.video_info:
-                meta_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{info.video_id}_meta.json")
-                with open(meta_path, "w", encoding="utf-8") as f:
-                    json.dump({
-                        "title": info.video_info.title,
-                        "channel": info.video_info.channel
-                    }, f)
-    
-    def load_from_disk(self):
-        """Load all saved transcripts from disk"""
-        if not os.path.exists(TRANSCRIPT_CACHE_DIR):
-            return
+            with open(file_path, "r", encoding="utf-8") as f:
+                text = f.read()
             
-        for filename in os.listdir(TRANSCRIPT_CACHE_DIR):
-            if filename.endswith(".txt") and not filename.endswith("_meta.txt"):
-                video_id = filename.replace(".txt", "")
-                file_path = os.path.join(TRANSCRIPT_CACHE_DIR, filename)
-                
-                with open(file_path, "r", encoding="utf-8") as f:
-                    text = f.read()
-                
-                # Try to load metadata
-                meta_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{video_id}_meta.json")
-                video_info = None
-                if os.path.exists(meta_path):
-                    try:
-                        with open(meta_path, "r", encoding="utf-8") as f:
-                            meta = json.load(f)
-                            video_info = VideoInfo(
-                                video_id=video_id,
-                                title=meta.get("title", "Unknown Title"),
-                                channel=meta.get("channel", "Unknown Channel")
-                            )
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-                
-                info = TranscriptInfo(video_id=video_id, text=text, video_info=video_info)
-                self.transcripts[video_id] = info
+            # Try to load metadata
+            meta_path = os.path.join(TRANSCRIPT_CACHE_DIR, f"{video_id}_meta.json")
+            video_info = None
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                        video_info = VideoInfo(
+                            video_id=video_id,
+                            title=meta.get("title", "Unknown Title"),
+                            channel=meta.get("channel", "Unknown Channel")
+                        )
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
+            info = TranscriptInfo(video_id=video_id, text=text, video_info=video_info)
+            _TRANSCRIPTS[video_id] = info
 
-
-# Server lifespan and context
-@asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[TranscriptCache]:
-    """Initialize and clean up server resources"""
-    # Initialize cache and load existing transcripts
-    cache = TranscriptCache()
-    cache.load_from_disk()
-    
-    try:
-        yield cache
-    finally:
-        # Any cleanup would go here
-        pass
-
-
-# Apply lifespan to server
-mcp = FastMCP("YouTube Transcript Server", lifespan=app_lifespan)
+# Load transcripts at module initialization time
+load_transcripts_from_disk()
 
 
 # Helper functions
@@ -170,18 +149,14 @@ async def get_video_info(video_id: str) -> VideoInfo:
     return VideoInfo(video_id=video_id, title="Unknown", channel="Unknown")
 
 
-async def get_transcript(video_id: str, ctx: Context) -> str:
+async def get_transcript(video_id: str) -> str:
     """Download and format transcript from a YouTube video ID"""
     # Check cache first
-    cache: TranscriptCache = ctx.request_context.lifespan_context
-    cached_info = cache.get(video_id)
+    cached_info = get_transcript_from_cache(video_id)
     if cached_info and cached_info.text:
-        ctx.info(f"Returning cached transcript for video {video_id}")
         return cached_info.text
     
     # Download the transcript if not cached
-    ctx.info(f"Downloading transcript for video {video_id}")
-    
     try:
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
         
@@ -210,19 +185,18 @@ async def get_transcript(video_id: str, ctx: Context) -> str:
             video_info=video_info,
             text=full_transcript
         )
-        cache.add(info)
+        add_transcript_to_cache(info)
         
         return full_transcript
         
     except Exception as e:
         error_msg = f"Error retrieving transcript: {str(e)}"
-        ctx.error(error_msg)
         return error_msg
 
 
 # Tools
 @mcp.tool()
-async def download_transcript(youtube_url: str, ctx: Context) -> str:
+async def download_transcript(youtube_url: str) -> str:
     """
     Download a video transcript from YouTube.
     
@@ -234,22 +208,20 @@ async def download_transcript(youtube_url: str, ctx: Context) -> str:
     """
     try:
         video_id = extract_video_id(youtube_url)
-        return await get_transcript(video_id, ctx)
+        return await get_transcript(video_id)
     except ValueError as e:
-        ctx.error(f"Invalid YouTube URL: {str(e)}")
         return f"Error: {str(e)}"
 
 
 @mcp.tool()
-async def list_available_transcripts(ctx: Context) -> str:
+async def list_available_transcripts() -> str:
     """
     List all transcripts that have been downloaded and cached.
     
     Returns:
         A formatted list of available transcripts with video titles
     """
-    cache: TranscriptCache = ctx.request_context.lifespan_context
-    transcripts = cache.list_all()
+    transcripts = list_all_transcripts()
     
     if not transcripts:
         return "No transcripts have been downloaded yet."
@@ -270,89 +242,13 @@ async def list_available_transcripts(ctx: Context) -> str:
 @mcp.resource("transcript://{video_id}")
 async def get_transcript_resource(video_id: str) -> str:
     """Get transcript by video ID, downloading if necessary"""
-    # We'll modify get_transcript to not require ctx parameter
-    try:
-        # Get the cache from lifespan context
-        ctx = Context()
-        cache = ctx.request_context.lifespan_context
-        
-        # Check cache first
-        cached_info = cache.get(video_id)
-        if cached_info and cached_info.text:
-            return cached_info.text
-        
-        # Download the transcript if not cached
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        
-        # Format the transcript with timestamps
-        formatted_transcript = ""
-        for entry in transcript_list:
-            minutes = int(entry['start'] // 60)
-            seconds = int(entry['start'] % 60)
-            timestamp = f"[{minutes:02d}:{seconds:02d}]"
-            formatted_transcript += f"{timestamp} {entry['text']}\n"
-        
-        # Get video info (without ctx)
-        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-        with httpx.Client() as client:
-            response = client.get(url)
-            video_info = None
-            if response.status_code == 200:
-                data = response.json()
-                video_info = VideoInfo(
-                    video_id=video_id,
-                    title=data.get("title", "Unknown Title"),
-                    channel=data.get("author_name", "Unknown Channel")
-                )
-            else:
-                video_info = VideoInfo(video_id=video_id, title="Unknown", channel="Unknown")
-        
-        # Create header with video information
-        header = f"Title: {video_info.title}\n"
-        header += f"Channel: {video_info.channel}\n"
-        header += f"Video ID: {video_id}\n\n"
-        header += "TRANSCRIPT:\n"
-        
-        full_transcript = header + formatted_transcript
-        
-        # Save to cache
-        info = TranscriptInfo(
-            video_id=video_id,
-            video_info=video_info,
-            text=full_transcript
-        )
-        cache.add(info)
-        
-        return full_transcript
-        
-    except Exception as e:
-        return f"Error retrieving transcript: {str(e)}"
+    return await get_transcript(video_id)
 
 
 @mcp.resource("transcripts://list")
 async def list_transcripts_resource() -> str:
     """List all available transcripts"""
-    try:
-        # Get the cache from lifespan context
-        ctx = Context()
-        cache = ctx.request_context.lifespan_context
-        transcripts = cache.list_all()
-        
-        if not transcripts:
-            return "No transcripts have been downloaded yet."
-        
-        result = "Available Transcripts:\n\n"
-        for i, info in enumerate(transcripts, 1):
-            title = info.video_info.title if info.video_info else "Unknown Title"
-            channel = info.video_info.channel if info.video_info else "Unknown Channel"
-            
-            result += f"{i}. {title}\n"
-            result += f"   Channel: {channel}\n"
-            result += f"   ID: {info.video_id}\n"
-        
-        return result
-    except Exception as e:
-        return f"Error listing transcripts: {str(e)}"
+    return await list_available_transcripts()
 
 
 # Prompts
