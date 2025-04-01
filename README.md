@@ -6,7 +6,7 @@ This project will download the transcript for a YouTube video, and make it avaia
 ## Use
 Use a prompt in the following format:
 
-> Download the transcript for https://www.youtube.com/watch?v=QGzgsSXdPjo
+> Download the transcript for https://www.youtube.com/watch?v=QGzgsSXdPjo.  Use the MCP server.
 
 
 ## Motivation
