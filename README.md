@@ -6,7 +6,14 @@ This project will download the transcript for a YouTube video, and make it avaia
 ## Use
 Use a prompt in the following format:
 
+To download a transcript
 > Download the transcript for https://www.youtube.com/watch?v=QGzgsSXdPjo.  Use the MCP server.
+
+To get a summary
+> Summarize the transcript
+
+To extract new and interesting information from the transcript.  This prompt often reveals very interesting information:
+> highlight new information from the transcript
 
 
 ## Motivation
